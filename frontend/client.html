@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Chat app</title>
+    <link rel="stylesheet" href="client.css">
+</head>
+
+<body>
+    <div class="app" id="app">
+
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <span>Chats</span>
+                <button id="logout-btn" class="logout-btn" title="Log out">Log out</button>
+            </div>
+            <div class="conversation-list" id="conversation-list"></div>
+        </aside>
+
+        <section class="chat-panel" id="chat-panel">
+
+            <div class="chat-header">
+                <button id="back-button" class="back-button" aria-label="Back to conversations">&larr;</button>
+                <span class="header-title" id="chat-title">Group Chat</span>
+
+                <button id="enable-notifs-btn" class="online-toggle" style="display:none;">
+                    🔔 Enable notifications
+                </button>
+
+                <button id="online-toggle" class="online-toggle" aria-expanded="false" aria-controls="online-users">
+                    <span class="online-dot"></span>
+                    <span id="online-count">0</span> online
+                    <span class="caret"></span>
+                </button>
+                <div id="online-users" role="menu"></div>
+            </div>
+
+            <div id="message-list"></div>
+            <div id="typing-indicator"></div>
+
+            <div class="chat-input">
+                <input id="message-input" placeholder="Type a message" autocomplete="off">
+                <button id="send-message" disabled>Send</button>
+            </div>
+
+        </section>
+    </div>
+
+    <script src="http://localhost:3000/socket.io/socket.io.js"></script>
+
+    <script>
+        const API_BASE = "http://localhost:3000";
+
+        const token = localStorage.getItem("chatToken");
+        const username = localStorage.getItem("chatUsername");
+        const avatar = localStorage.getItem("chatAvatar") || "";
+
+        if (!token || !username) {
+            window.location.href = "login.html";
+        }
+
+        const socket = io(API_BASE, { auth: { token } });
+
+        socket.on("connect_error", (err) => {
+            console.log("Connection failed:", err.message);
+            localStorage.removeItem("chatToken");
+            localStorage.removeItem("chatUsername");
+            localStorage.removeItem("chatAvatar");
+            window.location.href = "login.html";
+        });
+
+        document.getElementById("logout-btn").addEventListener("click", () => {
+            socket.disconnect(); // tell the server right away, don't wait for heartbeat timeout
+            localStorage.removeItem("chatToken");
+            localStorage.removeItem("chatUsername");
+            localStorage.removeItem("chatAvatar");
+            window.location.href = "login.html";
+        });
+
+        // Also disconnect cleanly on tab close/refresh
+        window.addEventListener("beforeunload", () => {
+            socket.disconnect();
+        });
+
+        // Elements
+        const messageInput = document.getElementById("message-input");
+        const messageList = document.getElementById("message-list");
+        const sendButton = document.getElementById("send-message");
+        const typingIndicator = document.getElementById("typing-indicator");
+        const onlineToggle = document.getElementById("online-toggle");
+        const onlineUsersPanel = document.getElementById("online-users");
+        const onlineCount = document.getElementById("online-count");
+        const conversationList = document.getElementById("conversation-list");
+        const chatTitle = document.getElementById("chat-title");
+        const appEl = document.getElementById("app");
+        const backButton = document.getElementById("back-button");
+
+        let typingTimeout;
+        let currentConversation = null; // null = group chat, otherwise a username
+        let latestOnlineUsers = [];
+        let allUsers = []; // every signed-up user, online or not
+        let unreadCounts = {}; // "group" or a username -> unread message count
+
+        const enableNotifsBtn = document.getElementById("enable-notifs-btn");
+
+        function updateNotifButton() {
+            if (!("Notification" in window)) {
+                enableNotifsBtn.style.display = "none";
+                return;
+            }
+            enableNotifsBtn.style.display = Notification.permission === "default" ? "flex" : "none";
+        }
+        updateNotifButton();
+
+        enableNotifsBtn.addEventListener("click", () => {
+            Notification.requestPermission().then(updateNotifButton);
+        });
+
+        function notify(title, body, onClickAction) {
+            if (!("Notification" in window)) {
+                console.log("Notifications not supported in this browser");
+                return;
+            }
+            if (Notification.permission !== "granted") {
+                console.log("Notification skipped — permission is:", Notification.permission);
+                return;
+            }
+            const n = new Notification(title, { body });
+            n.onclick = () => {
+                window.focus();
+                if (onClickAction) onClickAction();
+                n.close();
+            };
+        }
+
+        function incrementUnread(key) {
+            unreadCounts[key] = (unreadCounts[key] || 0) + 1;
+            renderSidebar();
+        }
+
+        // ── AVATAR HELPERS ──────────────────────────────
+
+        function initialsAvatar(name) {
+            const initial = (name || "?").trim().charAt(0).toUpperCase() || "?";
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) {
+                hash = name.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            const hue = Math.abs(hash) % 360;
+            const bg = `hsl(${hue}, 55%, 45%)`;
+            const svg = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+                    <rect width="64" height="64" rx="32" fill="${bg}"/>
+                    <text x="50%" y="50%" dy=".35em" text-anchor="middle"
+                          font-family="Arial, sans-serif" font-size="28" fill="white">${initial}</text>
+                </svg>`;
+            return "data:image/svg+xml;base64," + btoa(svg);
+        }
+
+        function avatarSrc(user) {
+            return user.avatar && user.avatar.trim() ? user.avatar : initialsAvatar(user.username);
+        }
+
+        function formatTime(timestamp) {
+            return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        }
+
+        // ── MESSAGE RENDERING ────────────────────────────
+
+        function renderMessage(msg) {
+            const isMe = msg.username === username;
+            const row = document.createElement("div");
+            row.classList.add("message", isMe ? "my-message" : "other-message");
+
+            row.innerHTML = `
+                <div class="message-wrapper">
+                    <img class="avatar" src="${avatarSrc(msg)}"
+                         onerror="this.src='${initialsAvatar(msg.username)}'" />
+                    <div>
+                        ${!isMe ? `<div class="sender-name">${msg.username}</div>` : ""}
+                        <div class="bubble">
+                            ${msg.message}
+                            <div class="timestamp">${formatTime(msg.timestamp)}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            messageList.appendChild(row);
+        }
+
+        function scrollToBottom() {
+            messageList.scrollTop = messageList.scrollHeight;
+        }
+
+        // ── SWITCHING CONVERSATIONS ──────────────────────
+
+        function openGroupChat() {
+            currentConversation = null;
+            unreadCounts["group"] = 0;
+            chatTitle.textContent = "Group Chat";
+            onlineToggle.style.display = "";
+            messageList.innerHTML = "";
+            appEl.classList.add("conversation-open");
+            setActiveSidebarItem(null);
+            socket.emit("get_messages");
+        }
+
+        function openDm(withUser) {
+            currentConversation = withUser;
+            unreadCounts[withUser] = 0;
+            chatTitle.textContent = withUser;
+            onlineToggle.style.display = "none";
+            messageList.innerHTML = "";
+            appEl.classList.add("conversation-open");
+            setActiveSidebarItem(withUser);
+            socket.emit("open_dm", withUser);
+        }
+
+        function setActiveSidebarItem(key) {
+            document.querySelectorAll(".conversation-item").forEach(el => {
+                el.classList.toggle("active", el.dataset.conv === (key ?? "group"));
+            });
+        }
+
+        backButton.addEventListener("click", () => {
+            appEl.classList.remove("conversation-open");
+        });
+
+        // ── SIDEBAR (group chat + every user, online or not) ──
+
+        function renderSidebar() {
+            conversationList.innerHTML = "";
+            const onlineSet = new Set(latestOnlineUsers.map(u => u.username));
+
+            const groupItem = document.createElement("div");
+            groupItem.className = "conversation-item";
+            groupItem.dataset.conv = "group";
+            const groupUnread = unreadCounts["group"] || 0;
+            groupItem.innerHTML = `
+                <div class="conv-avatar group-avatar">#</div>
+                <div class="conv-meta">
+                    <div class="conv-name">Group Chat</div>
+                    <div class="conv-sub">Everyone in the room</div>
+                </div>
+                ${groupUnread > 0 ? `<span class="unread-badge">${groupUnread}</span>` : ""}
+            `;
+            groupItem.addEventListener("click", openGroupChat);
+            conversationList.appendChild(groupItem);
+
+            allUsers
+                .filter(u => u.username !== username)
+                .forEach(user => {
+                    const isOnline = onlineSet.has(user.username);
+                    const unread = unreadCounts[user.username] || 0;
+                    const item = document.createElement("div");
+                    item.className = "conversation-item";
+                    item.dataset.conv = user.username;
+                    item.innerHTML = `
+                        <div class="conv-avatar-wrap">
+                            <img class="conv-avatar" src="${avatarSrc(user)}"
+                                 onerror="this.src='${initialsAvatar(user.username)}'" />
+                            <span class="conv-status-dot ${isOnline ? "online" : "offline"}"></span>
+                        </div>
+                        <div class="conv-meta">
+                            <div class="conv-name">${user.username}</div>
+                            <div class="conv-sub">${isOnline ? "Online" : "Offline"}</div>
+                        </div>
+                        ${unread > 0 ? `<span class="unread-badge">${unread}</span>` : ""}
+                    `;
+                    item.addEventListener("click", () => openDm(user.username));
+                    conversationList.appendChild(item);
+                });
+
+            setActiveSidebarItem(currentConversation);
+        }
+
+        async function loadAllUsers() {
+            try {
+                const res = await fetch(`${API_BASE}/api/users`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    allUsers = await res.json();
+                    renderSidebar();
+                }
+            } catch (err) {
+                console.log("Failed to load users:", err);
+            }
+        }
+        loadAllUsers();
+
+        // New signups won't push anything to an already-open tab on their own,
+        // so re-pull the contact list every so often and whenever the tab
+        // regains focus.
+        setInterval(loadAllUsers, 3000);
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible") loadAllUsers();
+        });
+
+        // ── SENDING ──────────────────────────────────────
+
+        messageInput.addEventListener("input", () => {
+            sendButton.disabled = messageInput.value.trim().length === 0;
+            socket.emit("typing", username);
+        });
+
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            if (currentConversation === null) {
+                socket.emit('new_message', message);
+            } else {
+                socket.emit('private_message', { to: currentConversation, message });
+            }
+
+            messageInput.value = '';
+            sendButton.disabled = true;
+            messageInput.focus();
+        }
+
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // ── ONLINE USERS DROPDOWN (group chat header) ────
+
+        function openDropdown() {
+            onlineUsersPanel.classList.add("open");
+            onlineToggle.setAttribute("aria-expanded", "true");
+        }
+        function closeDropdown() {
+            onlineUsersPanel.classList.remove("open");
+            onlineToggle.setAttribute("aria-expanded", "false");
+        }
+        onlineToggle.addEventListener("click", (e) => {
+            e.stopPropagation();
+            onlineUsersPanel.classList.contains("open") ? closeDropdown() : openDropdown();
+        });
+        document.addEventListener("click", (e) => {
+            if (!onlineUsersPanel.contains(e.target) && e.target !== onlineToggle) closeDropdown();
+        });
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") closeDropdown();
+        });
+
+        // ── SOCKET EVENTS ─────────────────────────────────
+
+        socket.on('load_messages', (messages) => {
+            if (currentConversation !== null) return;
+            messageList.innerHTML = "";
+            messages.forEach(renderMessage);
+            scrollToBottom();
+        });
+
+        socket.on('broadcast_message', (userMessage) => {
+            const isMe = userMessage.username === username;
+            const viewingGroup = currentConversation === null;
+
+            if (viewingGroup) {
+                renderMessage(userMessage);
+                scrollToBottom();
+            } else if (!isMe) {
+                incrementUnread("group");
+            }
+
+            if (!isMe && (document.hidden || !viewingGroup)) {
+                notify(userMessage.username, userMessage.message, openGroupChat);
+            }
+        });
+
+        socket.on('load_dm_messages', ({ withUser, messages }) => {
+            if (currentConversation !== withUser) return;
+            messageList.innerHTML = "";
+            messages.forEach(renderMessage);
+            scrollToBottom();
+        });
+
+        socket.on('private_message', (msg) => {
+            const isMe = msg.username === username;
+            const otherParty = isMe ? msg.to : msg.username;
+            const viewingThread = currentConversation === otherParty;
+
+            if (viewingThread) {
+                renderMessage(msg);
+                scrollToBottom();
+            } else if (!isMe) {
+                incrementUnread(otherParty);
+            }
+
+            if (!isMe && (document.hidden || !viewingThread)) {
+                notify(msg.username, msg.message, () => openDm(msg.username));
+            }
+        });
+
+        socket.on("typing", (typingUser) => {
+            if (typingUser !== username) {
+                typingIndicator.innerHTML =
+                    typingUser + ' is typing <span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+                clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => { typingIndicator.innerHTML = ""; }, 1500);
+            }
+        });
+
+        socket.on("online_users", (users) => {
+            latestOnlineUsers = users;
+            onlineCount.textContent = users.length;
+
+            // If someone online isn't in our contact list yet, they must have
+            // just signed up — refresh the full list right now instead of
+            // waiting for the next poll.
+            const knownUsernames = new Set(allUsers.map(u => u.username));
+            const hasUnknownUser = users.some(u => !knownUsernames.has(u.username) && u.username !== username);
+            if (hasUnknownUser) {
+                loadAllUsers();
+            }
+
+            onlineUsersPanel.innerHTML = "";
+            if (users.length === 0) {
+                onlineUsersPanel.innerHTML = `<div class="empty-note">No one else is online</div>`;
+            } else {
+                users.forEach(user => {
+                    const el = document.createElement("div");
+                    el.setAttribute("role", "menuitem");
+                    el.innerHTML = `
+                        <span class="online-dot"></span>
+                        <img class="avatar-small" src="${avatarSrc(user)}"
+                             onerror="this.src='${initialsAvatar(user.username)}'" />
+                        <span>${user.username}${user.username === username ? " (you)" : ""}</span>
+                    `;
+                    onlineUsersPanel.appendChild(el);
+                });
+            }
+
+            renderSidebar();
+        });
+
+    </script>
+
+</body>
+</html>

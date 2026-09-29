@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log in - Chat App</title>
+    <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+    <div class="auth-card">
+        <h1 class="auth-title">Welcome back</h1>
+        <p class="auth-sub">Log in to keep chatting</p>
+
+        <form id="login-form">
+            <label>Username
+                <input type="text" id="username" required autocomplete="username">
+            </label>
+            <label>Password
+                <input type="password" id="password" required autocomplete="current-password">
+            </label>
+            <p class="auth-error" id="error-msg"></p>
+            <button type="submit" id="submit-btn">Log in</button>
+        </form>
+
+        <p class="auth-switch">Don't have an account? <a href="signup.html">Sign up</a></p>
+    </div>
+
+    <script>
+        const API_BASE = "http://localhost:3000";
+        const form = document.getElementById("login-form");
+        const errorMsg = document.getElementById("error-msg");
+        const submitBtn = document.getElementById("submit-btn");
+
+        // Already logged in? skip straight to the app.
+        if (localStorage.getItem("chatToken")) {
+            window.location.href = "client.html";
+        }
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            errorMsg.textContent = "";
+            submitBtn.disabled = true;
+
+            const username = document.getElementById("username").value.trim();
+            const password = document.getElementById("password").value;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    errorMsg.textContent = data.error || "Login failed";
+                    submitBtn.disabled = false;
+                    return;
+                }
+
+                localStorage.setItem("chatToken", data.token);
+                localStorage.setItem("chatUsername", data.username);
+                localStorage.setItem("chatAvatar", data.avatar || "");
+                window.location.href = "client.html";
+            } catch (err) {
+                errorMsg.textContent = "Could not reach the server";
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

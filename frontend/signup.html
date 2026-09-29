@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign up - Chat App</title>
+    <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+    <div class="auth-card">
+        <h1 class="auth-title">Create your account</h1>
+        <p class="auth-sub">Join the chat in a few seconds</p>
+
+        <form id="signup-form">
+            <label>Username
+                <input type="text" id="username" required autocomplete="username" minlength="2">
+            </label>
+            <label>Password
+                <input type="password" id="password" required autocomplete="new-password" minlength="6">
+            </label>
+            <label>Profile picture URL <span style="font-weight:400;color:#9ca3af;">(optional)</span>
+                <input type="url" id="avatar" placeholder="https://...">
+            </label>
+            <p class="auth-error" id="error-msg"></p>
+            <button type="submit" id="submit-btn">Sign up</button>
+        </form>
+
+        <p class="auth-switch">Already have an account? <a href="login.html">Log in</a></p>
+    </div>
+
+    <script>
+        const API_BASE = "http://localhost:3000";
+        const form = document.getElementById("signup-form");
+        const errorMsg = document.getElementById("error-msg");
+        const submitBtn = document.getElementById("submit-btn");
+
+        if (localStorage.getItem("chatToken")) {
+            window.location.href = "client.html";
+        }
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            errorMsg.textContent = "";
+            submitBtn.disabled = true;
+
+            const username = document.getElementById("username").value.trim();
+            const password = document.getElementById("password").value;
+            const avatar = document.getElementById("avatar").value.trim();
+
+            try {
+                const res = await fetch(`${API_BASE}/api/signup`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password, avatar })
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    errorMsg.textContent = data.error || "Signup failed";
+                    submitBtn.disabled = false;
+                    return;
+                }
+
+                localStorage.setItem("chatToken", data.token);
+                localStorage.setItem("chatUsername", data.username);
+                localStorage.setItem("chatAvatar", data.avatar || "");
+                window.location.href = "client.html";
+            } catch (err) {
+                errorMsg.textContent = "Could not reach the server";
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
