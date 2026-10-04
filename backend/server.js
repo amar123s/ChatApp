@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from 'express';
 import { Server } from 'socket.io';
 import cors from 'cors';
@@ -10,6 +11,7 @@ import authrouter,{JWT} from './routes/routes.js';
 const onlineUsers = {};
 const userSocket={};
 const app = express();
+const PORT=process.env.PORT
 
 const allowedorigin=['http://localhost:3000',
     'http://127.0.0.1:3000',
@@ -122,7 +124,7 @@ socket.on("private_message",({to,message})=>{
     })
 });
 
-server.listen(3000, () => {
-    console.log("Server is live on 3000");
+server.listen(PORT, () => {
+    console.log(`Server is live on ${PORT}`);
     connectDB();
 })

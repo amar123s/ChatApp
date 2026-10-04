@@ -1,11 +1,10 @@
 import express from "express";
+import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { usermodel } from "../messge/userschema.js";
 import jwt from "jsonwebtoken";
-
-export const JWT="KEYY";
 const authrouter=express.Router();
-
+export const JWT = process.env.JWT
 function signtoken(user){
     return jwt.sign({
         username:user.username,
