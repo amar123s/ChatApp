@@ -1,6 +1,8 @@
 import "dotenv/config";
 import express from 'express';
 import { Server } from 'socket.io';
+import path from "path";
+import { fileURLToPath } from "url";
 import cors from 'cors';
 import http from 'http';
 import jwt from "jsonwebtoken";
@@ -9,6 +11,7 @@ import { mesmodel } from './messge/messageschema.js';
 import authrouter,{JWT} from './routes/routes.js';
 
 const onlineUsers = {};
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const userSocket={};
 const app = express();
 const PORT=process.env.PORT
@@ -25,6 +28,9 @@ app.use(cors({
 }));
 
 app.use("/api",authrouter);
+
+app.get("/",(req,res)=>res.redirect("/login.html"));
+app.use(express.static(path.join(__dirname,"../frontend")))
 
 const server = http.createServer(app);
 const io = new Server(server, {
