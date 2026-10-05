@@ -21,6 +21,7 @@ const allowedorigin=['http://localhost:3000',
     'http://localhost:5500',
     'http://127.0.0.1:5500'];
 
+app.use((req,res,next) =>{console.log(req.method,req.url);next();});
 app.use(express.json());
 app.use(cors({
     origin:allowedorigin,
@@ -54,7 +55,7 @@ io.use((socket,next)=>{
 });
 
 io.on('connection', (socket) => {
-    console.log("Connection is established");
+    console.log("Connection is established",socket.username);
 
     onlineUsers[socket.id] = { username: socket.username, avatar: socket.avatar };
     userSocket[socket.username] = socket.id;
